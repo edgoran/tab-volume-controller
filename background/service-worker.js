@@ -43,12 +43,11 @@ async function ensureContentScript(tabId) {
     }
 }
 
-// --- Preset Application ---
+// --- Volume Application ---
 
-async function applyPresetToTab(tab) {
-    if (presetAppliedTabs.has(tab.id)) return;
-
-    const data = await chrome.storage.local.get(["sitePresets"]);
+async function applyVolumeToTab(tab) {
+    const data = await chrome.storage.local.get(["tabVolumes", "sitePresets"]);
+    const tabVolumes = data.tabVolumes || {};
     const sitePresets = data.sitePresets || {};
 
     let hostname = null;
@@ -58,10 +57,12 @@ async function applyPresetToTab(tab) {
         return;
     }
 
-    const preset = sitePresets[hostname];
-    if (!preset) return;
+    // Check for existing tab volume first, then site preset
+    const tabSettings = tabVolumes[tab.id];
+    const sitePreset = hostname ? sitePresets[hostname] : null;
+    const settings = tabSettings || sitePreset;
 
-    presetAppliedTabs.add(tab.id);
+    if (!settings) return;
 
     await ensureContentScript(tab.id);
 
@@ -69,10 +70,10 @@ async function applyPresetToTab(tab) {
     setTimeout(() => {
         chrome.tabs.sendMessage(tab.id, {
             type: "SET_VOLUME",
-            volume: preset.muted ? 0 : preset.volume
+            volume: settings.muted ? 0 : settings.volume
         });
 
-        if (preset.muted) {
+        if (settings.muted) {
             chrome.tabs.sendMessage(tab.id, {
                 type: "SET_MUTE",
                 muted: true
@@ -86,8 +87,13 @@ async function applyPresetToTab(tab) {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.audible === true) {
         managedTabs.add(tabId);
-        ensureContentScript(tabId);
-        applyPresetToTab(tab);
+        applyVolumeToTab(tab);
+    }
+
+    // Also handle page refresh — content script is destroyed
+    if (changeInfo.status === "complete" && managedTabs.has(tabId)) {
+        injectedTabs.delete(tabId); // Content script was destroyed by refresh
+        applyVolumeToTab(tab);
     }
 });
 

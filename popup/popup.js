@@ -207,6 +207,12 @@ async function refreshTabs(force = false) {
     if (isInteracting) return;
 
     chrome.runtime.sendMessage({ type: "GET_AUDIO_TABS" }, (tabs) => {
+        // Handle cases where service worker hasn't responded
+        if (chrome.runtime.lastError) {
+            renderTabs([]);
+            return;
+        }
+
         const newTabs = tabs || [];
         const newTabIds = newTabs.map(t => t.id).sort();
 
@@ -283,7 +289,7 @@ function updateExtensionIcon() {
 
 // Initial load
 loadSettings().then(() => {
-    refreshTabs();
+    refreshTabs(true);
     updateExtensionIcon();
 });
 
