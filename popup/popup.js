@@ -3,6 +3,8 @@ const emptyState = document.getElementById("empty-state");
 const boostCheckbox = document.getElementById("boost-checkbox");
 const presetsCheckbox = document.getElementById("presets-checkbox");
 const resetAllBtn = document.getElementById("reset-all");
+const settingsBtn = document.getElementById("settings-btn");
+const settingsDropdown = document.getElementById("settings-dropdown");
 
 let boostEnabled = false;
 let presetsEnabled = true;
@@ -15,7 +17,7 @@ let currentTabIds = [];
 async function loadSettings() {
     const data = await chrome.storage.local.get(["boostEnabled", "presetsEnabled", "tabVolumes", "sitePresets"]);
     boostEnabled = data.boostEnabled || false;
-    presetsEnabled = data.presetsEnabled !== false; // Default to true
+    presetsEnabled = data.presetsEnabled !== false;
     tabVolumes = data.tabVolumes || {};
     sitePresets = data.sitePresets || {};
     boostCheckbox.checked = boostEnabled;
@@ -79,7 +81,7 @@ function createTabRow(tab) {
     const maxValue = boostEnabled ? 5.0 : 1.0;
 
     // Apply preset to newly discovered tabs
-    if (isNewTab && preset) {
+    if (isNewTab && preset && presetsEnabled) {
         chrome.runtime.sendMessage({
             type: "SET_VOLUME",
             tabId: tab.id,
@@ -211,7 +213,6 @@ async function refreshTabs(force = false) {
     if (isInteracting) return;
 
     chrome.runtime.sendMessage({ type: "GET_AUDIO_TABS" }, (tabs) => {
-        // Handle cases where service worker hasn't responded
         if (chrome.runtime.lastError) {
             renderTabs([]);
             return;
@@ -253,8 +254,36 @@ function resetAll() {
     });
 }
 
-// Reset all button handler
-resetAllBtn.addEventListener("click", resetAll);
+// Settings dropdown toggle
+settingsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    settingsDropdown.classList.toggle("hidden");
+});
+
+// Close dropdown when clicking outside
+document.addEventListener("click", (e) => {
+    if (!settingsDropdown.contains(e.target) && !settingsBtn.contains(e.target)) {
+        settingsDropdown.classList.add("hidden");
+    }
+});
+
+// Make settings items toggle their checkbox when clicked anywhere on the row
+document.querySelectorAll(".settings-item").forEach(item => {
+    item.addEventListener("click", (e) => {
+        if (e.target.type === "checkbox") return;
+
+        const checkboxId = item.dataset.for;
+        const checkbox = document.getElementById(checkboxId);
+        checkbox.checked = !checkbox.checked;
+        checkbox.dispatchEvent(new Event("change"));
+    });
+});
+
+// Presets toggle handler
+presetsCheckbox.addEventListener("change", (e) => {
+    presetsEnabled = e.target.checked;
+    saveSettings();
+});
 
 // Boost toggle handler
 boostCheckbox.addEventListener("change", (e) => {
@@ -278,11 +307,8 @@ boostCheckbox.addEventListener("change", (e) => {
     refreshTabs(true);
 });
 
-// Presets toggle handler
-presetsCheckbox.addEventListener("change", (e) => {
-    presetsEnabled = e.target.checked;
-    saveSettings();
-});
+// Reset all button handler
+resetAllBtn.addEventListener("click", resetAll);
 
 // Update extension icon based on current theme
 function updateExtensionIcon() {
