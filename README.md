@@ -25,7 +25,7 @@ A Chrome extension that lets you control the volume of individual browser tabs i
 
 ## Browser Compatibility
 - Google Chrome 110+
-- Chromium-based browsers (Edge, Brave, etc.) — untested but should work
+- Chromium-based browsers (Edge, Brave, etc.)
 
 ## MIT License
 
