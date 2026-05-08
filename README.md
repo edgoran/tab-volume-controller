@@ -27,6 +27,16 @@ A Chrome extension that lets you control the volume of individual browser tabs i
 - Google Chrome 110+
 - Chromium-based browsers (Edge, Brave, etc.)
 
+## Developers
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/edgoran/tab-volume-controller.git
+2. Open Chrome and navigate to chrome://extensions/
+3. Enable Developer mode (toggle in the top-right corner)
+4. Click "Load unpacked"
+5. Select the levels-tab-volume-mixer folder
+6. Pin the extension by clicking the puzzle piece icon in the toolbar and clicking the pin next to "Levels"
+
 ## MIT License
 
 Copyright (c) 2026 Edward Goran
