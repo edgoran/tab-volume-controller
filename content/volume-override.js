@@ -1,15 +1,35 @@
-// volume-override.js — Runs in the MAIN world (page context)
-// This intercepts ALL media volume changes at the prototype level
-
 (function () {
     if (window.__levelsOverrideInjected) return;
     window.__levelsOverrideInjected = true;
 
-    // Check if settings were pre-injected by the background script
-    // If so, use them. If not, start at full volume (no preset = no modification).
-    const preloaded = window.__levelsPreload;
-    let masterVolume = preloaded ? preloaded.volume : 1.0;
-    let masterMuted = preloaded ? preloaded.muted : false;
+    // --- Determine initial volume ---
+    // Priority: 1. Preload from background script (fastest if available)
+    //           2. localStorage mirror (synchronous, survives service worker sleep)
+    //           3. Default to full volume (no preset)
+
+    let masterVolume = 1.0;
+    let masterMuted = false;
+
+    // Check for background-injected preload
+    if (window.__levelsPreload) {
+        masterVolume = window.__levelsPreload.volume;
+        masterMuted = window.__levelsPreload.muted;
+    } else {
+        // Fall back to localStorage mirror
+        try {
+            const stored = localStorage.getItem('__levels_settings');
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                // Only apply if it matches the current hostname
+                if (parsed.hostname === location.hostname) {
+                    masterVolume = parsed.volume;
+                    masterMuted = parsed.muted;
+                }
+            }
+        } catch (e) {
+            // localStorage blocked or unavailable — stay at defaults
+        }
+    }
 
     const originalVolumeDescriptor = Object.getOwnPropertyDescriptor(
         HTMLMediaElement.prototype, 'volume'
@@ -65,7 +85,6 @@
         });
     }
 
-    // Listen for messages from the isolated content script
     window.addEventListener('message', (event) => {
         if (event.source !== window) return;
         if (!event.data || event.data.direction !== 'levels-to-page') return;
