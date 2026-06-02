@@ -1,4 +1,3 @@
-// Prevent double-injection
 if (window.__levelsInjected) {
     // Already running
 } else {
@@ -7,62 +6,50 @@ if (window.__levelsInjected) {
     let currentVolume = 1.0;
     let isMuted = false;
 
-    // Track processed elements using a property on the element itself
-    const GAIN_KEY = "__levels_gain";
+    function sendToPage(type, data) {
+        window.postMessage({
+            direction: 'levels-to-page',
+            type: type,
+            ...data
+        }, '*');
+    }
 
-    // Create or retrieve a GainNode for a media element
-    function getOrCreateGain(element) {
-        // Already processed by us
-        if (element[GAIN_KEY]) {
-            return element[GAIN_KEY];
-        }
-
-        // Already connected to a MediaElementSource by someone else
-        if (element.__alreadyConnected) {
-            return null;
-        }
-
+    // Fetch saved settings and sync to the MAIN world
+    // This handles cases where the manifest-injected override started at defaults
+    async function initFromStorage() {
         try {
-            const audioContext = new AudioContext();
-            const source = audioContext.createMediaElementSource(element);
-            const gainNode = audioContext.createGain();
+            const data = await chrome.storage.local.get(["tabVolumes", "sitePresets", "presetsEnabled"]);
+            const tabVolumes = data.tabVolumes || {};
+            const sitePresets = data.sitePresets || {};
+            const presetsEnabled = data.presetsEnabled !== false;
 
-            source.connect(gainNode);
-            gainNode.connect(audioContext.destination);
+            const hostname = window.location.hostname;
 
-            const entry = { audioContext, gainNode };
-            element[GAIN_KEY] = entry;
-            return entry;
+            const response = await chrome.runtime.sendMessage({ type: "GET_OWN_TAB_ID" });
+            const tabId = response?.tabId;
+
+            const tabSettings = tabId ? tabVolumes[tabId] : null;
+            const sitePreset = (hostname && presetsEnabled) ? sitePresets[hostname] : null;
+            const settings = tabSettings || sitePreset;
+
+            if (settings) {
+                currentVolume = settings.volume;
+                isMuted = settings.muted;
+            }
+
+            // Sync to MAIN world — reinforces or updates the preloaded value
+            sendToPage('INIT_SETTINGS', {
+                volume: currentVolume,
+                muted: isMuted
+            });
         } catch (e) {
-            // Mark it so we don't try again
-            element.__alreadyConnected = true;
-            return null;
+            // On failure, ensure audio isn't stuck — set full volume
+            sendToPage('INIT_SETTINGS', { volume: 1.0, muted: false });
         }
     }
 
-    // Apply volume to all media elements on the page
-    function applyVolume() {
-        const mediaElements = document.querySelectorAll("audio, video");
-        mediaElements.forEach(element => {
-            const result = getOrCreateGain(element);
-            if (!result) return;
+    initFromStorage();
 
-            const { gainNode } = result;
-            gainNode.gain.value = isMuted ? 0 : currentVolume;
-        });
-    }
-
-    // Watch for new media elements being added to the page
-    const observer = new MutationObserver(() => {
-        applyVolume();
-    });
-
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
-
-    // Listen for messages from the background service worker
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.type === "PING") {
             sendResponse({ status: "alive" });
@@ -71,19 +58,16 @@ if (window.__levelsInjected) {
 
         if (message.type === "SET_VOLUME") {
             currentVolume = message.volume;
-            applyVolume();
+            sendToPage('SET_VOLUME', { volume: currentVolume });
             sendResponse({ success: true });
             return;
         }
 
         if (message.type === "SET_MUTE") {
             isMuted = message.muted;
-            applyVolume();
+            sendToPage('SET_MUTE', { muted: isMuted });
             sendResponse({ success: true });
             return;
         }
     });
-
-    // Apply on initial load
-    applyVolume();
 }

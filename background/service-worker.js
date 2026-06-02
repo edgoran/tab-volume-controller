@@ -1,10 +1,5 @@
-// Track tabs we've already injected into
 const injectedTabs = new Set();
-
-// Track tabs we're actively managing
 const managedTabs = new Set();
-
-// Track tabs that have had presets applied
 const presetAppliedTabs = new Set();
 
 // --- Icon Theming ---
@@ -18,6 +13,45 @@ function updateIcon(isDark) {
             "128": `icons/icon128-${suffix}.png`
         }
     });
+}
+
+// --- Settings Lookup ---
+
+async function getSettingsForTab(tab) {
+    const data = await chrome.storage.local.get(["tabVolumes", "sitePresets", "presetsEnabled"]);
+    const tabVolumes = data.tabVolumes || {};
+    const sitePresets = data.sitePresets || {};
+    const presetsEnabled = data.presetsEnabled !== false;
+
+    let hostname = null;
+    try {
+        hostname = new URL(tab.url).hostname;
+    } catch {
+        return null;
+    }
+
+    const tabSettings = tabVolumes[tab.id];
+    const sitePreset = (hostname && presetsEnabled) ? sitePresets[hostname] : null;
+    return tabSettings || sitePreset || null;
+}
+
+// --- Preload Injection ---
+// Injects the saved volume BEFORE volume-override.js reads it
+
+async function injectPreload(tabId, settings) {
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId, allFrames: true },
+            world: "MAIN",
+            injectImmediately: true,
+            func: (volume, muted) => {
+                window.__levelsPreload = { volume, muted };
+            },
+            args: [settings.volume, settings.muted]
+        });
+    } catch (e) {
+        // Tab may not be ready yet, that's ok â€” content script will handle it
+    }
 }
 
 // --- Content Script Injection ---
@@ -34,9 +68,16 @@ async function ensureContentScript(tabId) {
 
     try {
         await chrome.scripting.executeScript({
-            target: { tabId },
+            target: { tabId, allFrames: true },
+            files: ["content/volume-override.js"],
+            world: "MAIN"
+        });
+
+        await chrome.scripting.executeScript({
+            target: { tabId, allFrames: true },
             files: ["content/content-script.js"]
         });
+
         injectedTabs.add(tabId);
     } catch (e) {
         console.warn(`Could not inject into tab ${tabId}:`, e.message);
@@ -46,53 +87,42 @@ async function ensureContentScript(tabId) {
 // --- Volume Application ---
 
 async function applyVolumeToTab(tab) {
-    const data = await chrome.storage.local.get(["tabVolumes", "sitePresets", "presetsEnabled"]);
-    const tabVolumes = data.tabVolumes || {};
-    const sitePresets = data.sitePresets || {};
-    const presetsEnabled = data.presetsEnabled !== false;
-
-    let hostname = null;
-    try {
-        hostname = new URL(tab.url).hostname;
-    } catch {
-        return;
-    }
-
-    // Check for existing tab volume first, then site preset (if enabled)
-    const tabSettings = tabVolumes[tab.id];
-    const sitePreset = (hostname && presetsEnabled) ? sitePresets[hostname] : null;
-    const settings = tabSettings || sitePreset;
-
+    const settings = await getSettingsForTab(tab);
     if (!settings) return;
 
     await ensureContentScript(tab.id);
 
-    // Small delay to let content script initialize
     setTimeout(() => {
-        // Always send both volume and mute state so content script is fully in sync
         chrome.tabs.sendMessage(tab.id, {
             type: "SET_MUTE",
             muted: settings.muted
-        });
+        }).catch(() => {});
 
         chrome.tabs.sendMessage(tab.id, {
             type: "SET_VOLUME",
             volume: settings.volume
-        });
+        }).catch(() => {});
     }, 100);
 }
 
 // --- Tab Tracking ---
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    // When navigation starts, preload the volume before anything else runs
+    if (changeInfo.status === "loading" && tab.url) {
+        const settings = await getSettingsForTab(tab);
+        if (settings) {
+            await injectPreload(tabId, settings);
+        }
+    }
+
     if (changeInfo.audible === true) {
         managedTabs.add(tabId);
         applyVolumeToTab(tab);
     }
 
-    // Also handle page refresh — content script is destroyed
     if (changeInfo.status === "complete" && managedTabs.has(tabId)) {
-        injectedTabs.delete(tabId); // Content script was destroyed by refresh
+        injectedTabs.delete(tabId);
         applyVolumeToTab(tab);
     }
 });
@@ -109,6 +139,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "THEME_UPDATE") {
         updateIcon(message.isDark);
         sendResponse({ success: true });
+        return true;
+    }
+
+    if (message.type === "GET_OWN_TAB_ID") {
+        sendResponse({ tabId: sender.tab?.id ?? null });
         return true;
     }
 
@@ -149,7 +184,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             chrome.tabs.sendMessage(message.tabId, {
                 type: "SET_VOLUME",
                 volume: message.volume
-            });
+            }).catch(() => {});
         });
         sendResponse({ success: true });
         return true;
@@ -161,7 +196,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             chrome.tabs.sendMessage(message.tabId, {
                 type: "SET_MUTE",
                 muted: message.muted
-            });
+            }).catch(() => {});
         });
         sendResponse({ success: true });
         return true;
